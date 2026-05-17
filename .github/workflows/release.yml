@@ -72,13 +72,12 @@ jobs:
           - os: macos-14
             target: universal-apple-darwin
             artifacts: |
-              app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-              app/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+              target/universal-apple-darwin/release/bundle/dmg/*.dmg
           - os: windows-latest
             target: ''
             artifacts: |
-              app/src-tauri/target/release/bundle/msi/*.msi
-              app/src-tauri/target/release/bundle/nsis/*.exe
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -93,7 +92,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: desktop-${{ matrix.os }}
-          workspaces: app/src-tauri -> target
+          workspaces: . -> target
 
       - uses: pnpm/action-setup@v4
         with:
