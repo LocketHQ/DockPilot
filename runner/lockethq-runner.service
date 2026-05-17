@@ -1,0 +1,19 @@
+[Unit]
+Description=DockPilot Runner — Docker control-plane agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lockethq-runner --config /etc/lockethq/runner.toml
+Restart=always
+RestartSec=2
+User=root
+# Hardening — runner needs docker.sock access, so keep root but drop other caps.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+# Rust
+/target/
+**/target/
+# Cargo.lock is committed for binary crates (app + runner).
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Tauri
+app/src-tauri/target/
+app/src-tauri/gen/
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Env / secrets
+.env
+.env.local
+
+# Runner binaries (built artifacts)
+app/src-tauri/binaries/lockethq-runner-*

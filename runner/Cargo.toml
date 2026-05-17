@@ -1,0 +1,47 @@
+[package]
+name = "lockethq-runner"
+version.workspace = true
+edition.workspace = true
+description = "DockPilot Runner — Docker control-plane agent that lives on each managed server"
+
+[[bin]]
+name = "lockethq-runner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["full"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+# HTTP server
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "auth"] }
+hyper = "1"
+
+# Docker client (use the unix socket — no TLS needed for local docker.sock).
+bollard = { version = "0.17", default-features = false }
+futures-util = "0.3"
+
+# Config
+toml = "0.8"
+
+# Sysinfo for /v1/info + /v1/stats
+sysinfo = "0.32"
+
+# Shared types
+lockethq-shared = { path = "../shared" }
+
+# Misc
+tar = "0.4"
+flate2 = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+base64 = "0.22"
