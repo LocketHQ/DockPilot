@@ -1,6 +1,6 @@
 # DockPilot — macOS Server Manager
 
-A calm, Tauri-based desktop app for managing Docker containers across a fleet of remote servers. Built from the Claude Design handoff bundle in `lockethq-server-manager/`.
+A calm, Tauri-based desktop app for managing Docker containers across a fleet of remote servers. 
 
 ![lockethq logo](app/src-tauri/icons/icon.png)
 
