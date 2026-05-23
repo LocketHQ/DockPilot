@@ -123,7 +123,11 @@ export function WizardScreen({ step: initialStep = 0 }: { step?: number }) {
     if (source === "github") return repo.split("/").pop() || "github-build";
     if (source === "upload")
       return (uploadFile?.name || "upload").replace(/\.(tar\.gz|tgz|zip)$/i, "");
-    return "compose-stack";
+    // Compose: prefer the YAML's own top-level `name:` (docker compose spec).
+    // No fallback — the user must type one if it isn't in the YAML, otherwise
+    // two unnamed stacks would share project name "compose-stack" and the
+    // second `compose up` would recreate the first stack's services.
+    return parseComposeTopName(composeYaml) || "";
   }
 
   async function readFileAsBase64(file: File): Promise<string> {
@@ -219,7 +223,12 @@ export function WizardScreen({ step: initialStep = 0 }: { step?: number }) {
       if (source === "image") return !!image.trim();
       if (source === "github") return !!repo.trim();
       if (source === "upload") return !!uploadFile;
-      if (source === "compose") return !!composeYaml.trim();
+      if (source === "compose") {
+        if (!composeYaml.trim()) return false;
+        // Require a project name so `docker compose -p <name>` can't collide
+        // with another stack and clobber its containers.
+        return !!(name.trim() || parseComposeTopName(composeYaml));
+      }
     }
     if (step === 3 && source === "compose") {
       const refs = parseComposeEnvRefs(composeYaml);
@@ -1273,8 +1282,35 @@ function ConfigureUpload(p: any) {
 
 function ConfigureCompose(p: any) {
   const services = countComposeServices(p.composeYaml);
+  const yamlName = parseComposeTopName(p.composeYaml);
   return (
-    <div>
+    <div style={{ display: "grid", gap: 16 }}>
+      {yamlName ? (
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            padding: "10px 14px",
+            background: "var(--surface-2)",
+            fontSize: 12,
+            color: "var(--muted)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span>Stack name from YAML:</span>
+          <Tag tone="accent">{yamlName}</Tag>
+        </div>
+      ) : (
+        <Input
+          label="Stack name"
+          value={p.name}
+          onChange={(e: any) => p.setName(e.target.value)}
+          placeholder="e.g. authentik, twenty"
+          hint="Required — becomes the docker compose project name. Pick something unique so this stack doesn't collide with existing ones. Tip: add `name: ...` at the top of the YAML to skip this field."
+        />
+      )}
       <div
         style={{
           border: "1px solid var(--border)",
@@ -2672,6 +2708,19 @@ function parseComposeVolumes(yaml: string): string[] {
 }
 function countComposeServices(yaml: string): number {
   return parseComposeServices(yaml).length;
+}
+// Top-level `name:` from a compose file. Only matches at column 0 so a service
+// named "name" can't shadow it.
+function parseComposeTopName(yaml: string): string | null {
+  for (const raw of yaml.split("\n")) {
+    if (/^[ \t]/.test(raw)) continue;
+    const m = raw.match(/^name\s*:\s*['"]?([^'"#\n]+?)['"]?\s*(#.*)?$/);
+    if (m) {
+      const v = m[1].trim();
+      if (v) return v;
+    }
+  }
+  return null;
 }
 function hasPortConflict(yaml: string): string | null {
   const ports: string[] = [];

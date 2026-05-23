@@ -442,6 +442,43 @@ fn sanitize_tag(s: &str) -> String {
         .to_string()
 }
 
+/// True when a compose project of this name already owns containers (running
+/// or stopped). Used as a collision check before `compose up` so a new stack
+/// can never recreate or remove an existing stack's services.
+async fn project_has_containers(project: &str) -> bool {
+    match tokio::process::Command::new("docker")
+        .args(["compose", "-p", project, "ps", "-aq"])
+        .output()
+        .await
+    {
+        Ok(out) => !String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        // If we can't tell, assume yes — refusing to reuse the name is the
+        // safe failure mode here (we'll just pick the next suffix).
+        Err(_) => true,
+    }
+}
+
+/// Resolve a free compose project name. If `base` is already in use, returns
+/// `base-2`, `base-3`, … until an unused one is found. Honors the project
+/// rule: never destroy an existing stack — give up the grouping name instead.
+async fn find_free_project_name(base: &str) -> String {
+    if !project_has_containers(base).await {
+        return base.to_string();
+    }
+    for i in 2..1000 {
+        let candidate = format!("{base}-{i}");
+        if !project_has_containers(&candidate).await {
+            return candidate;
+        }
+    }
+    // Pathological fallback — collision-free via pid + nanos.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{base}-{}-{}", std::process::id(), nanos)
+}
+
 async fn run_build(
     docker: &Docker,
     opts: bollard::image::BuildImageOptions<String>,
@@ -561,7 +598,18 @@ pub async fn compose_up_stream(
 ) -> Result<()> {
     use std::io::Write;
     use tokio::io::{AsyncBufReadExt, BufReader};
-    let safe = sanitize_tag(project);
+    let requested = sanitize_tag(project);
+    let safe = find_free_project_name(&requested).await;
+    if safe != requested {
+        let _ = tx
+            .send(serde_json::json!({
+                "event":"log","stream":"meta",
+                "line":format!(
+                    "project name '{requested}' is already in use — deploying as '{safe}' to avoid clobbering existing containers"
+                )
+            }).to_string())
+            .await;
+    }
     let dir = std::env::temp_dir().join(format!("lockethq-compose-{safe}"));
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         let _ = tx.send(serde_json::json!({"event":"error","message":format!("mkdir: {e}")}).to_string()).await;
@@ -665,7 +713,7 @@ pub async fn compose_up_stream(
         .filter(|s| !s.is_empty())
         .collect();
     let _ = tx
-        .send(serde_json::json!({"event":"done","ids":ids}).to_string())
+        .send(serde_json::json!({"event":"done","ids":ids,"project":safe}).to_string())
         .await;
     Ok(())
 }
@@ -701,7 +749,13 @@ pub async fn compose_up(
     env_vars: &[(String, String)],
 ) -> Result<Vec<String>> {
     use std::io::Write;
-    let safe = sanitize_tag(project);
+    let requested = sanitize_tag(project);
+    let safe = find_free_project_name(&requested).await;
+    if safe != requested {
+        tracing::warn!(
+            "compose project '{requested}' already in use; deploying as '{safe}' to avoid clobbering existing containers"
+        );
+    }
     let dir = std::env::temp_dir().join(format!("lockethq-compose-{safe}"));
     tokio::fs::create_dir_all(&dir).await?;
     let yaml_path = dir.join("docker-compose.yml");
