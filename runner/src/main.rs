@@ -47,6 +47,10 @@ async fn main() -> Result<()> {
     let docker = docker::connect().await?;
     tracing::info!("connected to docker daemon");
 
+    // Move any compose projects left in /tmp by older builds into the
+    // persistent state dir so they survive restarts.
+    docker::migrate_legacy_compose_dirs().await;
+
     let state = Arc::new(routes::AppState {
         docker,
         token: cfg.token.clone(),

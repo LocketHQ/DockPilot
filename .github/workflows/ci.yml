@@ -27,6 +27,16 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
+      - name: Build runner binary
+        # The app's tauri.conf.json bundles `binaries/*` as resources, but those
+        # runner binaries are gitignored build artifacts only produced at release
+        # time. Without them the tauri build script fails with "glob pattern
+        # binaries/* ... didn't match any files". Build the real runner and stage
+        # it where the app expects it; this also verifies the runner compiles.
+        run: |
+          cargo build -p lockethq-runner
+          mkdir -p app/src-tauri/binaries
+          cp target/debug/lockethq-runner app/src-tauri/binaries/lockethq-runner-x86_64
       - name: cargo check
         run: cargo check --workspace --all-targets
 
