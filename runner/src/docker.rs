@@ -18,6 +18,99 @@ use lockethq_shared::{
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+/// Persistent root for runner-owned state. Lives under `/var/lib` (not `/tmp`)
+/// so compose files, `.env` files, and other deploy artifacts survive a runner
+/// restart — a private `/tmp` is wiped on every restart. Mirrors the location
+/// used by the proxy module (`/var/lib/lockethq/traefik`).
+pub const STATE_ROOT: &str = "/var/lib/lockethq";
+
+/// Directory holding the compose project for `project` (compose YAML + `.env`).
+/// Persisted under [`STATE_ROOT`] so it is never destroyed on restart.
+fn compose_project_dir(project: &str) -> std::path::PathBuf {
+    std::path::Path::new(STATE_ROOT)
+        .join("compose")
+        .join(project)
+}
+
+/// One-time migration for boxes upgraded from a build that stored compose
+/// projects in `/tmp` (`lockethq-compose-<project>`). Older runners ran with
+/// `PrivateTmp=true`, so those dirs were already wiped on restart — but if the
+/// runner is updated *without* a restart in between, the files may still be
+/// present. Move any survivors into the persistent location so a later
+/// `compose down`/recreate can still find the compose file. Best-effort: logs
+/// and continues on any error so a bad entry never blocks startup.
+pub async fn migrate_legacy_compose_dirs() {
+    let tmp = std::env::temp_dir();
+    let mut entries = match tokio::fs::read_dir(&tmp).await {
+        Ok(e) => e,
+        Err(_) => return, // no /tmp to scan — nothing to do
+    };
+    let dest_base = std::path::Path::new(STATE_ROOT).join("compose");
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(project) = name.strip_prefix("lockethq-compose-") else {
+            continue;
+        };
+        if !entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let dest = dest_base.join(project);
+        if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+            // Already migrated (or a newer deploy recreated it) — leave the
+            // canonical copy in place and drop the stale /tmp one.
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+            continue;
+        }
+        if let Err(e) = tokio::fs::create_dir_all(&dest_base).await {
+            tracing::warn!("compose migration: mkdir {dest_base:?} failed: {e}");
+            return;
+        }
+        // `rename` fails with EXDEV across filesystems (/tmp tmpfs →
+        // /var/lib disk), so fall back to a recursive copy + delete.
+        let moved = match tokio::fs::rename(entry.path(), &dest).await {
+            Ok(()) => true,
+            Err(_) => match copy_dir_recursive(&entry.path(), &dest).await {
+                Ok(()) => {
+                    let _ = tokio::fs::remove_dir_all(entry.path()).await;
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "compose migration: copying '{project}' to {dest:?} failed: {e}"
+                    );
+                    false
+                }
+            },
+        };
+        if moved {
+            tracing::info!("migrated legacy compose project '{project}' to {dest:?}");
+        }
+    }
+}
+
+/// Recursively copy `src` into `dst` (creating `dst`). Used by the legacy
+/// compose migration when a cross-filesystem `rename` isn't possible.
+fn copy_dir_recursive<'a>(
+    src: &'a std::path::Path,
+    dst: &'a std::path::Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        tokio::fs::create_dir_all(dst).await?;
+        let mut rd = tokio::fs::read_dir(src).await?;
+        while let Some(entry) = rd.next_entry().await? {
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if entry.file_type().await?.is_dir() {
+                copy_dir_recursive(&from, &to).await?;
+            } else {
+                tokio::fs::copy(&from, &to).await?;
+            }
+        }
+        Ok(())
+    })
+}
+
 pub async fn connect() -> Result<Docker> {
     Docker::connect_with_local_defaults()
         .context("connecting to docker daemon (is /var/run/docker.sock accessible?)")
@@ -610,7 +703,7 @@ pub async fn compose_up_stream(
             }).to_string())
             .await;
     }
-    let dir = std::env::temp_dir().join(format!("lockethq-compose-{safe}"));
+    let dir = compose_project_dir(&safe);
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         let _ = tx.send(serde_json::json!({"event":"error","message":format!("mkdir: {e}")}).to_string()).await;
         return Ok(());
@@ -756,7 +849,7 @@ pub async fn compose_up(
             "compose project '{requested}' already in use; deploying as '{safe}' to avoid clobbering existing containers"
         );
     }
-    let dir = std::env::temp_dir().join(format!("lockethq-compose-{safe}"));
+    let dir = compose_project_dir(&safe);
     tokio::fs::create_dir_all(&dir).await?;
     let yaml_path = dir.join("docker-compose.yml");
     {

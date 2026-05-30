@@ -242,9 +242,22 @@ pub async fn update_runner(
         other => return Err(AppError::Ssh(format!("unsupported arch: {other}"))),
     };
     upload(&session, "/usr/local/bin/lockethq-runner", binary, "0755", sudo).await?;
+
+    // Refresh the systemd unit too — updates may ship unit changes (e.g.
+    // PrivateTmp/StateDirectory tweaks) that the binary alone can't apply.
+    // daemon-reload picks up the new unit before we restart.
+    let unit = include_str!("../../../runner/lockethq-runner.service");
+    upload(
+        &session,
+        "/etc/systemd/system/lockethq-runner.service",
+        unit.as_bytes(),
+        "0644",
+        sudo,
+    ).await?;
+
     let (code, _, err) = exec(
         &session,
-        &format!("{sudo} systemctl restart lockethq-runner && echo updated"),
+        &format!("{sudo} systemctl daemon-reload && {sudo} systemctl restart lockethq-runner && echo updated"),
     ).await?;
     if code != 0 {
         return Err(AppError::Ssh(format!("restart failed: {err}")));

@@ -9,11 +9,17 @@ ExecStart=/usr/local/bin/lockethq-runner --config /etc/lockethq/runner.toml
 Restart=always
 RestartSec=2
 User=root
+# Persist runner state (compose files, .env, traefik config) across restarts.
+# systemd creates/owns /var/lib/lockethq and never clears it on restart.
+StateDirectory=lockethq
 # Hardening — runner needs docker.sock access, so keep root but drop other caps.
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
-PrivateTmp=true
+# PrivateTmp must stay off: a private /tmp is a fresh tmpfs on every (re)start,
+# so anything the runner writes under /tmp is destroyed when the service
+# restarts. Persistent state lives under /var/lib/lockethq (see StateDirectory).
+PrivateTmp=false
 
 [Install]
 WantedBy=multi-user.target
